@@ -1,0 +1,13 @@
+<html lang="">
+<body>
+    <form action="/ask" method="post">
+        <label for="question">Ask a question:</label>
+        <input type="text" id="question" name="question">
+        <input type="submit" value="Submit">
+    </form>
+    {% if question and answer %}
+        <h2>Question: {{ question }}</h2>
+        <p>Answer: {{ answer }}</p>
+    {% endif %}
+</body>
+</html>

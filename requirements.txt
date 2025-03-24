@@ -1,0 +1,10 @@
+flask
+python-dotenv
+openai
+qdrant-client
+PyPDF2
+dropbox
+langchain
+langchain-openai
+nltk
+tiktoken
