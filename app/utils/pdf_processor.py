@@ -1,14 +1,8 @@
 import os
 import PyPDF2
-import nltk
+import re
 import logging
 from typing import List, Dict, Any
-
-# NLTK-Daten herunterladen (nur beim ersten Ausführen nötig)
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,8 +31,14 @@ class PDFProcessor:
             raise
 
     def chunk_text(self, text: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Text in überlappende Chunks aufteilen für bessere Verarbeitung"""
-        sentences = nltk.sent_tokenize(text)
+        """Text in überlappende Chunks aufteilen ohne NLTK"""
+        # Einfache Satzendenerkennung
+        sentence_endings = r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|\!|\n)\s'
+        sentences = re.split(sentence_endings, text)
+
+        # Leere Sätze entfernen
+        sentences = [s.strip() for s in sentences if s.strip()]
+
         chunks = []
         current_chunk = ""
 
