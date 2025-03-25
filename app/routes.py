@@ -2,7 +2,7 @@ from flask import Blueprint, render_template, request, jsonify, current_app
 import os
 import json
 from app.utils.dropbox_handler import DropboxHandler
-from app.utils.pdf_processor import PDFProcessor
+from app.utils.pdf_processor import OCRDocumentProcessor
 from app.utils.vector_store import VectorStore
 from app.utils.openai_handler import OpenAIHandler
 import logging
@@ -43,7 +43,7 @@ def index_documents():
 
         # Handler initialisieren
         dropbox_handler = DropboxHandler(dropbox_token)
-        pdf_processor = PDFProcessor(chunk_size, chunk_overlap)
+        pdf_processor = OCRDocumentProcessor(chunk_size, chunk_overlap)  # Hier die neue Klasse verwenden
         vector_store = VectorStore(qdrant_url, collection_name, api_key=qdrant_api_key)
         openai_handler = OpenAIHandler(openai_api_key, embedding_model=embedding_model)
 
