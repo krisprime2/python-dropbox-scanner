@@ -14,7 +14,7 @@ class Config:
 
     # Dropbox Konfiguration
     DROPBOX_ACCESS_TOKEN = os.environ.get('DROPBOX_ACCESS_TOKEN')
-    DROPBOX_PDF_PATH = os.environ.get('DROPBOX_PDF_PATH', '/Dropbox-Scanner')  # Pfad zu deinen PDFs in Dropbox
+    DROPBOX_PDF_PATH = os.environ.get('DROPBOX_PDF_PATH', '')  # Pfad zu deinen PDFs in Dropbox
 
     # Qdrant Konfiguration
     QDRANT_URL = os.environ.get('QDRANT_URL', 'http://localhost:6333')

@@ -46,10 +46,9 @@ def check_dropbox_permissions(dbx):
         return False
 
 
-def list_all_pdfs_in_dropbox(access_token, start_path=''):
+def list_dropbox_structure(access_token, start_path=''):
     """
-    Listet alle PDF-Dateien in Dropbox auf, beginnend mit einem bestimmten Pfad.
-    Durchsucht rekursiv alle Unterordner.
+    Listet alle Ordner und PDF-Dateien in Dropbox auf, beginnend mit einem bestimmten Pfad.
     """
     try:
         # Dropbox-Client initialisieren
@@ -85,55 +84,38 @@ def list_all_pdfs_in_dropbox(access_token, start_path=''):
                 print(f"FEHLER beim Zugriff auf Verzeichnis: {error_message}")
             return
 
-        # Alle PDFs rekursiv finden
-        print("\nSuche nach PDF-Dateien (dies kann einige Zeit dauern)...")
-        pdfs = []
-        search_pdfs_recursive(dbx, start_path, pdfs)
-
-        # Ergebnisse ausgeben
-        if pdfs:
-            print(f"\nGefundene PDF-Dateien ({len(pdfs)}):")
-            print("-" * 50)
-            for i, pdf in enumerate(pdfs, 1):
-                print(f"{i}. {pdf['path']} ({pdf['size'] / 1024 / 1024:.2f} MB)")
-
-            # Informationen zur Anwendung
-            print("\nWie es weitergeht:")
-            print("1. Starte deine Flask-Anwendung mit 'python run.py'")
-            print("2. Öffne http://localhost:5000 im Browser")
-            print("3. Klicke auf 'Dokumente indexieren', um die PDFs zu laden")
-            print("4. Stelle Fragen zu den Dokumentinhalten")
-        else:
-            print("Keine PDF-Dateien gefunden.")
-            print("\nMögliche Lösungen:")
-            print("- Überprüfe, ob du PDFs in deinem Dropbox-Konto hast")
-            print("- Passe den DROPBOX_PDF_PATH in deiner .env-Datei an")
+        # Struktur rekursiv ausgeben
+        print("\nDropbox-Struktur:")
+        print("-" * 50)
+        list_structure_recursive(dbx, start_path, 0)
 
     except Exception as e:
         print(f"Ein Fehler ist aufgetreten: {str(e)}")
 
 
-def search_pdfs_recursive(dbx, path, result_list):
+def list_structure_recursive(dbx, path, level):
     """
-    Durchsucht rekursiv einen Dropbox-Pfad nach PDF-Dateien.
+    Gibt rekursiv die Ordner- und Dateistruktur aus.
     """
     try:
         # Ordnerinhalt abrufen
         res = dbx.files_list_folder(path)
 
-        # Schleifen-Funktion zum Verarbeiten von Ergebnissen
+        # Funktion zum Verarbeiten von Einträgen
         def process_entries(entries):
             for entry in entries:
-                if isinstance(entry, dropbox.files.FileMetadata) and entry.name.lower().endswith('.pdf'):
-                    # PDF-Datei gefunden
-                    result_list.append({
-                        'path': entry.path_display,
-                        'size': entry.size,
-                        'modified': entry.client_modified
-                    })
-                elif isinstance(entry, dropbox.files.FolderMetadata):
-                    # Unterordner gefunden, rekursiv durchsuchen
-                    search_pdfs_recursive(dbx, entry.path_lower, result_list)
+                indent = "  " * level
+
+                if isinstance(entry, dropbox.files.FolderMetadata):
+                    # Ordner
+                    print(f"{indent}📁 {entry.name} (Pfad: {entry.path_display})")
+                    # Rekursiv in den Ordner gehen
+                    list_structure_recursive(dbx, entry.path_lower, level + 1)
+
+                elif isinstance(entry, dropbox.files.FileMetadata) and entry.name.lower().endswith('.pdf'):
+                    # PDF-Datei
+                    size_mb = entry.size / 1024 / 1024
+                    print(f"{indent}📄 {entry.name} ({size_mb:.2f} MB) (Pfad: {entry.path_display})")
 
         # Erste Seite verarbeiten
         process_entries(res.entries)
@@ -159,6 +141,6 @@ if __name__ == "__main__":
     # Standardpfad aus .env-Datei lesen oder Standardwert verwenden
     start_path = os.environ.get('DROPBOX_PDF_PATH', '')
 
-    # Alle PDFs auflisten
-    print(f"Suche nach PDF-Dateien in Dropbox (Startpfad: '{start_path or 'Wurzelverzeichnis'}')")
-    list_all_pdfs_in_dropbox(access_token, start_path)
+    # Dropbox-Struktur ausgeben
+    print(f"Durchsuche Dropbox (Startpfad: '{start_path or 'Wurzelverzeichnis'}')")
+    list_dropbox_structure(access_token, start_path)
