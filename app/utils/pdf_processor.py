@@ -10,10 +10,10 @@ logger = logging.getLogger(__name__)
 
 
 class VisionAIDocumentProcessor:
-    def __init__(self, chunk_size=1000, chunk_overlap=200, credentials_path=None):
+    def __init__(self, chunk_size=1000, chunk_overlap=200, credentials_path=None, bucket_name=None):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
-        self.vision_handler = GoogleVisionHandler(credentials_path)
+        self.vision_handler = GoogleVisionHandler(credentials_path, bucket_name)
 
         # Dokumenttyp-Erkennungsmuster
         self.doc_type_patterns = {

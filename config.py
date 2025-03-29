@@ -14,7 +14,7 @@ class Config:
 
     # Dropbox Konfiguration
     DROPBOX_ACCESS_TOKEN = os.environ.get('DROPBOX_ACCESS_TOKEN')
-    DROPBOX_PDF_PATH = os.environ.get('DROPBOX_PDF_PATH', '')  # Pfad zu deinen PDFs in Dropbox
+    DROPBOX_PDF_PATH = os.environ.get('DROPBOX_PDF_PATH', '/Dropbox-Scanner')  # Pfad zu deinen PDFs in Dropbox
 
     # Qdrant Konfiguration
     QDRANT_URL = os.environ.get('QDRANT_URL', 'http://localhost:6333')
@@ -25,6 +25,7 @@ class Config:
     GOOGLE_VISION_CREDENTIALS_PATH = os.environ.get('GOOGLE_VISION_CREDENTIALS_PATH')
     GOOGLE_VISION_USE_LAYOUT = os.environ.get('GOOGLE_VISION_USE_LAYOUT', 'True').lower() in ('true', '1', 't')
     GOOGLE_VISION_REQUEST_TIMEOUT = int(os.environ.get('GOOGLE_VISION_REQUEST_TIMEOUT', '300'))  # Timeout in Sekunden
+    GCS_BUCKET_NAME = os.environ.get('GCS_BUCKET_NAME')
 
     # PDF-Verarbeitungskonfiguration
     CHUNK_SIZE = int(os.environ.get('CHUNK_SIZE', 1000))

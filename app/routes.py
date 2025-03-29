@@ -10,22 +10,14 @@ from app.utils.openai_handler import OpenAIHandler
 from app.utils.vision_handler import GoogleVisionHandler
 import logging
 
-# Logging konfigurieren
-log_level = getattr(logging, current_app.config.get('LOG_LEVEL', 'INFO'))
-log_file = current_app.config.get('LOG_FILE')
+# Blueprint erstellen
+main = Blueprint('main', __name__)
 
-logging.basicConfig(
-    level=log_level,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename=log_file
-)
+# Logger erstellen
 logger = logging.getLogger(__name__)
 
 # In-Memory-Cache für Antworten
 response_cache = {}
-
-main = Blueprint('main', __name__)
-
 
 @main.route('/')
 def index():
@@ -87,8 +79,6 @@ def index_documents():
             chunk_size,
             chunk_overlap,
             credentials_path=google_credentials_path,
-            use_layout=use_layout,
-            max_pages=max_pages
         )
 
         vector_store = VectorStore(qdrant_url, collection_name, api_key=qdrant_api_key)
@@ -356,6 +346,7 @@ def get_status():
 
             # Testversuch der API-Verbindung
             try:
+                bucket_name = current_app.config.get('GCS_BUCKET_NAME', 'pdf-vision-scanner-temp')
                 vision_handler = GoogleVisionHandler(google_credentials_path)
                 status["services"]["google_vision"] = "online"
             except Exception as vision_e:
