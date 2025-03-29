@@ -1,7 +1,6 @@
 import os
 import dropbox
 from dropbox.exceptions import AuthError
-from flask import current_app as app
 import logging
 
 logging.basicConfig(level=logging.INFO)
