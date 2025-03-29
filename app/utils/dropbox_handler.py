@@ -1,4 +1,5 @@
 import os
+import re
 import dropbox
 from dropbox.exceptions import AuthError
 import logging
@@ -22,6 +23,27 @@ class DropboxHandler:
         except AuthError:
             logger.error("Fehler bei der Authentifizierung mit Dropbox")
             raise
+
+    def _sanitize_filename(self, filename):
+        """Bereinigt den Dateinamen von ungültigen Zeichen für das Dateisystem"""
+        # Ungültige Zeichen für Windows-Dateisystem durch Unterstrich ersetzen
+        # Die Zeichen < > : " / \ | ? * sind in Windows-Dateinamen verboten
+        sanitized = re.sub(r'[<>:"/\\|?*]', '_', filename)
+
+        # Leerzeichen am Ende von Namen und Erweiterung entfernen
+        # (Windows erlaubt diese technisch, aber sie können zu Problemen führen)
+        sanitized = sanitized.rstrip()
+
+        # Sicherstellen, dass die Erweiterung erhalten bleibt
+        if filename.lower().endswith('.pdf') and not sanitized.lower().endswith('.pdf'):
+            sanitized += '.pdf'
+
+        # Falls der Name zu lang ist, kürzen (max. 255 Zeichen für viele Dateisysteme)
+        if len(sanitized) > 245:  # Etwas Puffer lassen
+            base, ext = os.path.splitext(sanitized)
+            sanitized = base[:245 - len(ext)] + ext
+
+        return sanitized
 
     def list_pdf_files(self, folder_path):
         """Alle PDF-Dateien im angegebenen Ordner auflisten"""
@@ -58,6 +80,12 @@ class DropboxHandler:
     def download_pdf(self, file_path, output_path):
         """PDF-Datei von Dropbox herunterladen"""
         try:
+            # Verzeichnis erstellen, falls es nicht existiert
+            output_dir = os.path.dirname(output_path)
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+
+            # Datei herunterladen
             with open(output_path, 'wb') as f:
                 metadata, response = self.dbx.files_download(file_path)
                 f.write(response.content)
@@ -73,8 +101,15 @@ class DropboxHandler:
         downloaded_paths = []
 
         for pdf in pdf_files:
-            output_path = os.path.join(output_folder, pdf['name'])
-            self.download_pdf(pdf['path'], output_path)
-            downloaded_paths.append(output_path)
+            # Dateinamen für lokales Dateisystem bereinigen
+            sanitized_name = self._sanitize_filename(pdf['name'])
+            output_path = os.path.join(output_folder, sanitized_name)
+
+            try:
+                self.download_pdf(pdf['path'], output_path)
+                downloaded_paths.append(output_path)
+            except Exception as e:
+                logger.error(f"Fehler beim Herunterladen von {pdf['path']}, überspringe Datei: {str(e)}")
+                continue
 
         return downloaded_paths

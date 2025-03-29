@@ -1,3 +1,4 @@
+import json
 import os
 import logging
 from google.cloud import vision
@@ -115,6 +116,7 @@ class GoogleVisionHandler:
             Tuple[str, int]: (Extrahierter Text, Anzahl der Seiten)
         """
         gcs_uri = None
+        output_gcs_uri = None
         try:
             # 1. PDF nach GCS hochladen
             gcs_uri = self._upload_to_gcs(pdf_path)
@@ -130,31 +132,61 @@ class GoogleVisionHandler:
                 vision.Feature(type_=vision.Feature.Type.DOCUMENT_TEXT_DETECTION)
             ]
 
-            # Anfrage erstellen (für alle Seiten)
-            request = vision.AsyncAnnotateFileRequest(
-                input_config=input_config,
-                features=features
+            # Output-Konfiguration hinzufügen (WICHTIG: Fehlender Teil im ursprünglichen Code)
+            output_prefix = f"output-{uuid.uuid4().hex}"
+            output_gcs_uri = f"gs://{self.bucket_name}/{output_prefix}/"
+
+            output_config = vision.OutputConfig(
+                gcs_destination=vision.GcsDestination(uri=output_gcs_uri),
+                batch_size=100  # Max. Anzahl Seiten pro Batch
             )
 
-            # 3. Asynchrone Operation starten
+            # 3. Anfrage erstellen (jetzt mit output_config)
+            request = vision.AsyncAnnotateFileRequest(
+                input_config=input_config,
+                features=features,
+                output_config=output_config  # Diese Zeile wurde hinzugefügt
+            )
+
+            # 4. Asynchrone Operation starten
             operation = self.client.async_batch_annotate_files(requests=[request])
             logger.info(f"Asynchrone Google Vision PDF-Verarbeitung für {pdf_path} gestartet")
 
-            # 4. Auf Ergebnis warten (mit Timeout)
-            response = operation.result(timeout=180)  # Timeout nach 3 Minuten
+            # 5. Auf Ergebnis warten (mit Timeout)
+            operation_result = operation.result(timeout=180)  # Timeout nach 3 Minuten
 
-            # 5. Extrahierten Text aus allen Seiten zusammenfügen
+            # 6. Ergebnisdateien aus GCS lesen
+            output_bucket = self.storage_client.bucket(self.bucket_name)
+            prefix = output_prefix + "/"
+            blobs = list(output_bucket.list_blobs(prefix=prefix))
+
+            # Überprüfen, ob Ergebnisdateien gefunden wurden
+            if not blobs:
+                logger.warning(f"Keine Ergebnisdateien in {output_gcs_uri} gefunden")
+                return "", 0
+
+            # 7. Extrahierten Text aus allen Ergebnisdateien zusammenfügen
             full_text = ""
             page_count = 0
 
-            for result in response.responses[0].responses:
-                if result.full_text_annotation.text:
-                    page_count += 1
-                    page_text = result.full_text_annotation.text
-                    full_text += f"--- Seite {page_count} ---\n{page_text}\n\n"
+            for blob in blobs:
+                if blob.name.endswith(".json"):
+                    # JSON-Datei herunterladen und parsen
+                    json_content = blob.download_as_text()
+                    response_json = json.loads(json_content)
+
+                    # Text aus der JSON-Antwort extrahieren
+                    if 'responses' in response_json:
+                        for response in response_json['responses']:
+                            if 'fullTextAnnotation' in response:
+                                page_count += 1
+                                page_text = response['fullTextAnnotation']['text']
+                                full_text += f"--- Seite {page_count} ---\n{page_text}\n\n"
+
+                    # Temporäre Ergebnisdatei löschen
+                    blob.delete()
 
             logger.info(f"PDF-Textextraktion abgeschlossen: {pdf_path} ({page_count} Seiten, {len(full_text)} Zeichen)")
-
             return full_text, page_count
 
         except Exception as e:
@@ -162,9 +194,21 @@ class GoogleVisionHandler:
             raise
 
         finally:
-            # Temporäre Datei aus GCS löschen, falls hochgeladen
+            # Temporäre Dateien aus GCS löschen
             if gcs_uri:
                 self._delete_from_gcs(gcs_uri)
+
+            # Versuchen, alle restlichen temporären Ausgabedateien zu löschen
+            if output_gcs_uri:
+                try:
+                    output_bucket = self.storage_client.bucket(self.bucket_name)
+                    output_prefix = output_gcs_uri.split("/")[-2]
+                    blobs = list(output_bucket.list_blobs(prefix=output_prefix))
+                    for blob in blobs:
+                        blob.delete()
+                    logger.info(f"Temporäre Ausgabedateien in {output_gcs_uri} gelöscht")
+                except Exception as cleanup_error:
+                    logger.warning(f"Fehler beim Löschen temporärer Ausgabedateien: {str(cleanup_error)}")
 
     def process_document_with_layout(self, pdf_path: str) -> Tuple[str, int]:
         """
@@ -178,11 +222,12 @@ class GoogleVisionHandler:
             Tuple[str, int]: (Extrahierter Text mit Layout-Informationen, Anzahl der Seiten)
         """
         gcs_uri = None
+        output_gcs_uri = None
         try:
             # 1. PDF nach GCS hochladen
             gcs_uri = self._upload_to_gcs(pdf_path)
 
-            # 2. Input und Output für die Vision API konfigurieren
+            # 2. Input für die Vision API konfigurieren
             input_config = vision.InputConfig(
                 gcs_source=vision.GcsSource(uri=gcs_uri),
                 mime_type='application/pdf'
@@ -194,8 +239,12 @@ class GoogleVisionHandler:
                 vision.Feature(type_=vision.Feature.Type.LAYOUT_DETECTION)
             ]
 
-            # Output-Konfiguration (für detaillierte Informationen)
+            # Output-Konfiguration erstellen
+            output_prefix = f"layout-{uuid.uuid4().hex}"
+            output_gcs_uri = f"gs://{self.bucket_name}/{output_prefix}/"
+
             output_config = vision.OutputConfig(
+                gcs_destination=vision.GcsDestination(uri=output_gcs_uri),
                 batch_size=100  # Max. Anzahl Seiten pro Batch
             )
 
@@ -211,67 +260,109 @@ class GoogleVisionHandler:
             logger.info(f"Asynchrone Google Vision Layout-Erkennung für {pdf_path} gestartet")
 
             # 5. Auf Ergebnis warten
-            response = operation.result(timeout=300)  # Timeout nach 5 Minuten
+            operation_result = operation.result(timeout=300)  # Timeout nach 5 Minuten
 
-            # 6. Extrahierten Text mit Layout-Informationen verarbeiten
+            # 6. Ergebnisdateien aus GCS lesen
+            output_bucket = self.storage_client.bucket(self.bucket_name)
+            prefix = output_prefix + "/"
+            blobs = list(output_bucket.list_blobs(prefix=prefix))
+
+            # Überprüfen, ob Ergebnisdateien gefunden wurden
+            if not blobs:
+                logger.warning(f"Keine Ergebnisdateien in {output_gcs_uri} gefunden")
+                # Fallback auf einfache Textextraktion
+                logger.info("Versuche Fallback auf einfache PDF-Verarbeitung")
+                return self.process_pdf_document(pdf_path)
+
+            # 7. Extrahierten Text mit Layout-Informationen verarbeiten
             full_text = ""
             page_count = 0
 
-            # Verarbeitet die Antwort und extrahiert Text mit Struktur
-            for document in response.responses:
-                for page in document.full_text_annotation.pages:
-                    page_count += 1
-                    page_text = f"--- Seite {page_count} ---\n"
+            for blob in blobs:
+                if blob.name.endswith(".json"):
+                    # JSON-Datei herunterladen und parsen
+                    json_content = blob.download_as_text()
+                    json_data = json.loads(json_content)
 
-                    # Text nach Blöcken organisieren und Tabellen erkennen
-                    blocks_by_y = {}
+                    # Wenn Layout-Erkennung verfügbar ist
+                    if 'responses' in json_data:
+                        for response in json_data['responses']:
+                            page_count += 1
+                            page_text = f"--- Seite {page_count} ---\n"
 
-                    for block in page.blocks:
-                        if not block.bounding_box:
-                            continue
+                            # Versuche zuerst, fullTextAnnotation zu verwenden
+                            if 'fullTextAnnotation' in response:
+                                full_text_annotation = response['fullTextAnnotation']
 
-                        # Block-Position ermitteln (für Tabellenerkennung)
-                        vertices = block.bounding_box.vertices
-                        block_y = sum(v.y for v in vertices) / len(vertices)
-                        block_y_key = int(block_y / 10) * 10  # Ähnliche Y-Positionen gruppieren
+                                # Page-Informationen parsen
+                                if 'pages' in full_text_annotation:
+                                    for page in full_text_annotation['pages']:
+                                        # Blocks nach Y-Koordinate gruppieren für Tabellenerkennung
+                                        blocks_by_y = {}
 
-                        # Text aus dem Block extrahieren
-                        block_text = ""
-                        for paragraph in block.paragraphs:
-                            para_text = ""
-                            for word in paragraph.words:
-                                word_text = ''.join([symbol.text for symbol in word.symbols])
-                                para_text += word_text + " "
-                            block_text += para_text.strip() + "\n"
+                                        if 'blocks' in page:
+                                            for block in page['blocks']:
+                                                if 'boundingBox' not in block:
+                                                    continue
 
-                        # Nach Y-Position gruppieren (für Tabellenzeilen)
-                        if block_y_key not in blocks_by_y:
-                            blocks_by_y[block_y_key] = []
+                                                # Block-Position ermitteln
+                                                vertices = block['boundingBox']['vertices']
+                                                block_y = sum(v.get('y', 0) for v in vertices) / len(vertices)
+                                                block_y_key = int(block_y / 10) * 10  # Ähnliche Y-Positionen gruppieren
 
-                        blocks_by_y[block_y_key].append({
-                            'text': block_text.strip(),
-                            'x': min(v.x for v in vertices)  # Linkeste X-Koordinate für Sortierung
-                        })
+                                                # Text aus dem Block extrahieren
+                                                block_text = ""
+                                                if 'paragraphs' in block:
+                                                    for paragraph in block['paragraphs']:
+                                                        para_text = ""
+                                                        if 'words' in paragraph:
+                                                            for word in paragraph['words']:
+                                                                word_text = ""
+                                                                if 'symbols' in word:
+                                                                    word_text = ''.join(
+                                                                        [symbol.get('text', '') for symbol in
+                                                                         word['symbols']])
+                                                                para_text += word_text + " "
+                                                        block_text += para_text.strip() + "\n"
 
-                    # Jede Zeile (Blöcke mit ähnlicher Y-Position) verarbeiten
-                    for y_key in sorted(blocks_by_y.keys()):
-                        # Blöcke in dieser Zeile nach X-Koordinate sortieren
-                        line_blocks = sorted(blocks_by_y[y_key], key=lambda b: b['x'])
+                                                # Nach Y-Position gruppieren (für Tabellenzeilen)
+                                                if block_y_key not in blocks_by_y:
+                                                    blocks_by_y[block_y_key] = []
 
-                        # Wenn mehrere Blöcke in dieser Zeile sind, könnte es eine Tabellenzeile sein
-                        if len(line_blocks) > 1:
-                            # Mit Tabs verbinden, um tabellenartige Struktur zu erhalten
-                            line_text = '\t'.join([block['text'] for block in line_blocks])
-                        else:
-                            # Einfacher Text
-                            line_text = line_blocks[0]['text'] if line_blocks else ""
+                                                blocks_by_y[block_y_key].append({
+                                                    'text': block_text.strip(),
+                                                    'x': min(v.get('x', 0) for v in vertices)
+                                                    # Linkeste X-Koordinate für Sortierung
+                                                })
 
-                        page_text += line_text + "\n"
+                                        # Blöcke nach Y-Position zu Text zusammenfügen
+                                        for y_key in sorted(blocks_by_y.keys()):
+                                            # Blöcke in dieser Zeile nach X-Koordinate sortieren
+                                            line_blocks = sorted(blocks_by_y[y_key], key=lambda b: b['x'])
 
-                    full_text += page_text + "\n"
+                                            # Wenn mehrere Blöcke in dieser Zeile sind, könnte es eine Tabellenzeile sein
+                                            if len(line_blocks) > 1:
+                                                # Mit Tabs verbinden, um tabellenartige Struktur zu erhalten
+                                                line_text = '\t'.join([block['text'] for block in line_blocks])
+                                            else:
+                                                # Einfacher Text
+                                                line_text = line_blocks[0]['text'] if line_blocks else ""
+
+                                            page_text += line_text + "\n"
+                                else:
+                                    # Einfach den gesamten Text verwenden, wenn keine strukturierten Daten verfügbar sind
+                                    page_text += full_text_annotation.get('text', '')
+
+                            # Fallback, wenn fullTextAnnotation nicht verfügbar ist
+                            elif 'textAnnotations' in response and response['textAnnotations']:
+                                page_text += response['textAnnotations'][0].get('description', '')
+
+                            full_text += page_text + "\n"
+
+                    # Temporäre Ergebnisdatei löschen
+                    blob.delete()
 
             logger.info(f"Layout-Erkennung abgeschlossen: {pdf_path} ({page_count} Seiten)")
-
             return full_text, page_count
 
         except Exception as e:
@@ -281,6 +372,18 @@ class GoogleVisionHandler:
             return self.process_pdf_document(pdf_path)
 
         finally:
-            # Temporäre Datei aus GCS löschen
+            # Temporäre Dateien aus GCS löschen
             if gcs_uri:
                 self._delete_from_gcs(gcs_uri)
+
+            # Versuchen, alle restlichen temporären Ausgabedateien zu löschen
+            if output_gcs_uri:
+                try:
+                    output_bucket = self.storage_client.bucket(self.bucket_name)
+                    output_prefix = output_gcs_uri.split("/")[-2]
+                    blobs = list(output_bucket.list_blobs(prefix=output_prefix))
+                    for blob in blobs:
+                        blob.delete()
+                    logger.info(f"Temporäre Ausgabedateien in {output_gcs_uri} gelöscht")
+                except Exception as cleanup_error:
+                    logger.warning(f"Fehler beim Löschen temporärer Ausgabedateien: {str(cleanup_error)}")
