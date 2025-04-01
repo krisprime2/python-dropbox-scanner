@@ -1,6 +1,8 @@
 document.addEventListener('DOMContentLoaded', function() {
     // Elemente aus dem DOM abrufen
     const indexButton = document.getElementById('indexButton');
+    const indexAllButton = document.getElementById('indexAllButton');
+    const resetIndexButton = document.getElementById('resetIndexButton');
     const indexStatus = document.getElementById('indexStatus');
     const questionForm = document.getElementById('questionForm');
     const questionInput = document.getElementById('question');
@@ -9,10 +11,31 @@ document.addEventListener('DOMContentLoaded', function() {
     const answerContent = document.getElementById('answerContent');
     const sourcesList = document.getElementById('sourcesList');
 
-    // Event-Listener für das Indexieren der Dokumente
+    // Event-Listener für das Indexieren neuer Dokumente
     indexButton.addEventListener('click', function() {
+        indexDocuments(false, false);
+    });
+
+    // Event-Listener für das Indexieren aller Dokumente
+    if (indexAllButton) {
+        indexAllButton.addEventListener('click', function() {
+            indexDocuments(false, true);
+        });
+    }
+
+    // Event-Listener für das Zurücksetzen und Neuindexieren
+    if (resetIndexButton) {
+        resetIndexButton.addEventListener('click', function() {
+            if (confirm('Möchten Sie wirklich den gesamten Index zurücksetzen und alle Dokumente neu indexieren?')) {
+                indexDocuments(true, true);
+            }
+        });
+    }
+
+    // Funktion zum Indexieren von Dokumenten
+    function indexDocuments(resetIndex, indexAll) {
         // UI aktualisieren
-        indexButton.disabled = true;
+        disableIndexButtons(true);
         indexStatus.innerHTML = '<div class="alert alert-info">Indexierung gestartet...</div>';
 
         // API-Anfrage senden
@@ -20,13 +43,29 @@ document.addEventListener('DOMContentLoaded', function() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
-            }
+            },
+            body: JSON.stringify({
+                reset_index: resetIndex,
+                index_all: indexAll
+            })
         })
         .then(response => response.json())
         .then(data => {
             // Erfolgs- oder Fehlermeldung anzeigen
             if (data.success) {
-                indexStatus.innerHTML = `<div class="alert alert-success">${data.message}</div>`;
+                // Detaillierte Erfolgsmeldung mit Statistiken
+                let statsHtml = '';
+                if (data.stats) {
+                    statsHtml = `
+                        <ul class="mt-2">
+                            <li>Verarbeitete Dateien: ${data.stats.processed_files}</li>
+                            <li>Übersprungene Dateien: ${data.stats.skipped_files}</li>
+                            <li>Erstellte Chunks: ${data.stats.total_chunks}</li>
+                            <li>Verarbeitungszeit: ${data.stats.processing_time} Sekunden</li>
+                        </ul>
+                    `;
+                }
+                indexStatus.innerHTML = `<div class="alert alert-success">${data.message}${statsHtml}</div>`;
             } else {
                 indexStatus.innerHTML = `<div class="alert alert-danger">${data.message}</div>`;
             }
@@ -36,9 +75,16 @@ document.addEventListener('DOMContentLoaded', function() {
             console.error('Fehler:', error);
         })
         .finally(() => {
-            indexButton.disabled = false;
+            disableIndexButtons(false);
         });
-    });
+    }
+
+    // Funktion zum Deaktivieren/Aktivieren der Index-Buttons
+    function disableIndexButtons(disabled) {
+        indexButton.disabled = disabled;
+        if (indexAllButton) indexAllButton.disabled = disabled;
+        if (resetIndexButton) resetIndexButton.disabled = disabled;
+    }
 
     // Event-Listener für das Frageformular
     questionForm.addEventListener('submit', function(event) {

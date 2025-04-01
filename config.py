@@ -47,3 +47,21 @@ class Config:
     # Cache-Konfiguration
     ENABLE_RESPONSE_CACHE = os.environ.get('ENABLE_RESPONSE_CACHE', 'True').lower() in ('true', '1', 't')
     CACHE_EXPIRATION_SECONDS = int(os.environ.get('CACHE_EXPIRATION_SECONDS', '3600'))  # 1 Stunde
+
+    # Scheduler-Konfiguration (neu)
+    SCHEDULER_ENABLED = os.environ.get('SCHEDULER_ENABLED', 'True').lower() in ('true', '1', 't')
+    SCHEDULER_API_ENABLED = os.environ.get('SCHEDULER_API_ENABLED', 'False').lower() in ('true', '1', 't')
+    SCHEDULER_TIMEZONE = os.environ.get('SCHEDULER_TIMEZONE', 'Europe/Berlin')
+
+    # APScheduler-spezifische Konfiguration
+    SCHEDULER_JOBSTORES = {
+        'default': {'type': 'memory'}
+    }
+    SCHEDULER_EXECUTORS = {
+        'default': {'type': 'threadpool', 'max_workers': 20}
+    }
+    SCHEDULER_JOB_DEFAULTS = {
+        'coalesce': False,
+        'max_instances': 1,
+        'misfire_grace_time': 60 * 60  # 1 Stunde Gnadenzeit bei verpassten Jobs
+    }

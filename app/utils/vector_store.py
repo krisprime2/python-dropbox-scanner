@@ -418,3 +418,33 @@ class VectorStore:
         except Exception as e:
             logger.error(f"Fehler beim Abrufen der Dokumentstatistiken: {str(e)}")
             raise
+
+    def get_indexed_files(self):
+        """
+        Gibt eine Liste aller bereits indexierten Dateien zurück
+
+        Returns:
+            List[str]: Liste der Dateinamen
+        """
+        try:
+            # Abfrage nach allen eindeutigen Dateinamen
+            result = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=None,
+                limit=10000,  # Anpassen nach Bedarf
+                with_payload=["filename"],
+                with_vectors=False
+            )[0]
+
+            # Extrahiere einzigartige Dateinamen
+            filenames = set()
+            for _, point in result:
+                filename = point.payload.get("filename")
+                if filename:
+                    filenames.add(filename)
+
+            logger.info(f"{len(filenames)} bereits indexierte Dateien gefunden")
+            return list(filenames)
+        except Exception as e:
+            logger.error(f"Fehler beim Abrufen der indexierten Dateien: {str(e)}")
+            return []

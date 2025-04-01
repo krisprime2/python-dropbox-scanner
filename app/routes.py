@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from flask import Blueprint, render_template, request, jsonify, current_app
 import os
 import json
@@ -24,14 +26,52 @@ def index():
     """Startseite der Anwendung"""
     return render_template('/index.html')
 
+def filter_new_documents(dropbox_handler, dropbox_path, upload_folder, indexed_files=[]):
+    """
+    Filtert nur neue, noch nicht indexierte Dokumente
+
+    Args:
+        dropbox_handler: Instanz des DropboxHandlers
+        dropbox_path: Pfad in Dropbox
+        upload_folder: Lokaler Upload-Ordner
+        indexed_files: Liste bereits indexierter Dateinamen
+
+    Returns:
+        List[str]: Liste lokaler Pfade zu neuen PDF-Dateien
+    """
+    # Alle PDFs in Dropbox auflisten
+    pdf_files = dropbox_handler.list_pdf_files(dropbox_path)
+
+    # Neue Dateien filtern
+    new_files = []
+    for pdf in pdf_files:
+        sanitized_name = dropbox_handler._sanitize_filename(pdf['name'])
+
+        # Prüfen, ob die Datei bereits indexiert wurde
+        if sanitized_name not in indexed_files:
+            logger.info(f"Neue Datei gefunden: {pdf['name']}")
+            try:
+                # Datei herunterladen
+                local_path = dropbox_handler.download_pdf(
+                    pdf['path'],
+                    os.path.join(upload_folder, sanitized_name)
+                )
+                new_files.append(local_path)
+            except Exception as e:
+                logger.error(f"Fehler beim Herunterladen von {pdf['path']}: {str(e)}")
+                continue
+
+    return new_files
+
 
 @main.route('/api/index-documents', methods=['POST'])
 def index_documents():
-    """Dokumente aus Dropbox laden und mit Google Vision AI indexieren"""
+    """Nur neue Dokumente aus Dropbox laden und mit Google Vision AI indexieren"""
     start_time = time.time()
     processing_stats = {
         "downloaded_files": 0,
         "processed_files": 0,
+        "skipped_files": 0,  # Neue Statistik für übersprungene Dateien
         "total_chunks": 0,
         "total_tokens": 0,
         "document_types": {},
@@ -60,8 +100,9 @@ def index_documents():
 
         # Parameter aus dem Request-Body holen (falls vorhanden)
         data = request.get_json(silent=True) or {}
-        reset_index = data.get('reset_index', True)
+        reset_index = data.get('reset_index', False)  # Standard: kein Zurücksetzen des Index
         specific_files = data.get('files', [])  # Liste bestimmter Dateien, falls angegeben
+        index_all_files = data.get('index_all', False)  # Neue Option: Alle Dateien neu indexieren
 
         # Prüfen, ob die Google Vision Credentials gesetzt sind
         if not google_credentials_path or not os.path.exists(google_credentials_path):
@@ -88,38 +129,59 @@ def index_documents():
         if reset_index:
             logger.info("Lösche bisherigen Index...")
             vector_store.clear_collection()
+            indexed_files = []
+        else:
+            # Liste bereits indexierter Dateien abrufen
+            indexed_files = vector_store.get_indexed_files()
+            logger.info(f"{len(indexed_files)} bereits indexierte Dateien gefunden")
 
-        # PDFs von Dropbox herunterladen
-        logger.info(f"Lade PDFs von Dropbox-Pfad: {dropbox_path}")
+        # PDFs von Dropbox herunterladen und filtern
+        pdf_paths = []
 
         if specific_files:
             # Nur bestimmte Dateien herunterladen
-            pdf_paths = []
+            logger.info(f"Verarbeite {len(specific_files)} spezifisch angegebene Dateien")
             for file_path in specific_files:
                 full_path = os.path.join(dropbox_path, file_path) if dropbox_path else file_path
+                filename = os.path.basename(file_path)
+
+                # Prüfen, ob die Datei bereits indexiert wurde und nicht neu indiziert werden soll
+                if not index_all_files and filename in indexed_files:
+                    logger.info(f"Überspringe bereits indexierte Datei: {filename}")
+                    processing_stats["skipped_files"] += 1
+                    continue
+
                 try:
-                    local_path = dropbox_handler.download_pdf(full_path,
-                                                              os.path.join(upload_folder, os.path.basename(file_path)))
+                    local_path = dropbox_handler.download_pdf(
+                        full_path,
+                        os.path.join(upload_folder, filename)
+                    )
                     pdf_paths.append(local_path)
                 except Exception as e:
                     logger.error(f"Fehler beim Herunterladen von {file_path}: {str(e)}")
-
-            if not pdf_paths:
-                return jsonify({
-                    "success": False,
-                    "message": "Keine der angegebenen PDF-Dateien konnte heruntergeladen werden."
-                }), 404
         else:
-            # Alle PDFs im angegebenen Pfad herunterladen
-            pdf_paths = dropbox_handler.download_all_pdfs(dropbox_path, upload_folder)
+            # Alle PDFs verarbeiten oder nur neue
+            logger.info(f"Lade PDFs von Dropbox-Pfad: {dropbox_path}")
+
+            if index_all_files:
+                # Alle Dateien herunterladen (Originales Verhalten)
+                pdf_paths = dropbox_handler.download_all_pdfs(dropbox_path, upload_folder)
+                logger.info(f"Alle {len(pdf_paths)} Dokumente werden neu indexiert")
+            else:
+                # Nur neue, noch nicht indexierte Dateien herunterladen
+                pdf_paths = filter_new_documents(dropbox_handler, dropbox_path, upload_folder, indexed_files)
+                logger.info(f"{len(pdf_paths)} neue Dokumente gefunden")
+                processing_stats["skipped_files"] = len(indexed_files)
 
         processing_stats["downloaded_files"] = len(pdf_paths)
 
         if not pdf_paths:
             return jsonify({
-                "success": False,
-                "message": "Keine PDF-Dateien in Dropbox gefunden"
-            }), 404
+                "success": True,
+                "message": "Keine neuen PDF-Dateien zum Indexieren gefunden" if processing_stats[
+                                                                                    "skipped_files"] > 0 else "Keine PDF-Dateien in Dropbox gefunden",
+                "stats": processing_stats
+            })
 
         # PDFs verarbeiten und in Chunks aufteilen
         logger.info(f"Starte OCR-Verarbeitung mit Google Vision AI für {len(pdf_paths)} Dokumente...")
@@ -164,7 +226,7 @@ def index_documents():
 
         return jsonify({
             "success": True,
-            "message": f"{len(chunks)} Chunks aus {len(pdf_paths)} PDFs erfolgreich indexiert",
+            "message": f"{len(chunks)} Chunks aus {len(pdf_paths)} PDFs erfolgreich indexiert ({processing_stats['skipped_files']} übersprungen)",
             "stats": processing_stats
         })
     except Exception as e:
@@ -500,3 +562,96 @@ def clear_cache():
         "success": True,
         "message": "Cache erfolgreich geleert"
     })
+
+
+@main.route('/api/scheduler/status', methods=['GET'])
+def get_scheduler_status():
+    """Status des Schedulers und der geplanten Jobs abrufen"""
+    try:
+        # Prüfen, ob der Scheduler aktiviert ist
+        scheduler_enabled = current_app.config.get('SCHEDULER_ENABLED', False)
+
+        if not scheduler_enabled:
+            return jsonify({
+                "success": True,
+                "scheduler_active": False,
+                "message": "Der Scheduler ist in der Konfiguration deaktiviert."
+            })
+
+        # Scheduler-Instance abrufen
+        from app import scheduler
+
+        # Alle Jobs auflisten
+        jobs = []
+        for job in scheduler.get_jobs():
+            next_run = job.next_run_time.strftime("%Y-%m-%d %H:%M:%S") if job.next_run_time else "Nicht geplant"
+            jobs.append({
+                "id": job.id,
+                "name": job.name,
+                "next_run": next_run,
+                "trigger": str(job.trigger)
+            })
+
+        return jsonify({
+            "success": True,
+            "scheduler_active": scheduler.running,
+            "jobs": jobs,
+            "timezone": current_app.config.get('SCHEDULER_TIMEZONE', 'UTC')
+        })
+    except Exception as e:
+        logger.error(f"Fehler beim Abrufen des Scheduler-Status: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Fehler: {str(e)}"
+        }), 500
+
+
+@main.route('/api/scheduler/run-now', methods=['POST'])
+def run_scheduler_job_now():
+    """Führt einen geplanten Job sofort aus"""
+    try:
+        # JSON-Daten aus dem Request extrahieren
+        data = request.get_json()
+
+        if not data or 'job_id' not in data:
+            return jsonify({
+                "success": False,
+                "message": "Keine Job-ID übermittelt"
+            }), 400
+
+        job_id = data['job_id']
+
+        # Prüfen, ob der Scheduler aktiviert ist
+        scheduler_enabled = current_app.config.get('SCHEDULER_ENABLED', False)
+
+        if not scheduler_enabled:
+            return jsonify({
+                "success": False,
+                "message": "Der Scheduler ist in der Konfiguration deaktiviert."
+            }), 400
+
+        # Scheduler-Instance abrufen
+        from app import scheduler
+
+        # Prüfen, ob der Job existiert
+        job = scheduler.get_job(job_id)
+        if not job:
+            return jsonify({
+                "success": False,
+                "message": f"Job mit ID '{job_id}' wurde nicht gefunden."
+            }), 404
+
+        # Job sofort ausführen
+        job.modify(next_run_time=datetime.now())
+
+        return jsonify({
+            "success": True,
+            "message": f"Job '{job_id}' wird jetzt ausgeführt.",
+            "next_run": job.next_run_time.strftime("%Y-%m-%d %H:%M:%S")
+        })
+    except Exception as e:
+        logger.error(f"Fehler beim manuellen Ausführen des Jobs: {str(e)}")
+        return jsonify({
+            "success": False,
+            "message": f"Fehler: {str(e)}"
+        }), 500
